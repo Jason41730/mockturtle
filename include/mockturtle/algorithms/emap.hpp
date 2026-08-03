@@ -151,6 +151,15 @@ struct emap_params
  */
 struct emap_stats
 {
+  struct multioutput_binding
+  {
+    std::string cell_name{};
+    std::vector<std::string> input_pins{};
+    std::vector<uint32_t> fanin_literals{};
+    std::vector<std::string> output_roles{};
+    std::vector<uint32_t> root_literals{};
+  };
+
   /*! \brief Area result. */
   double area{ 0 };
   /*! \brief Worst delay result. */
@@ -162,6 +171,14 @@ struct emap_stats
 
   /*! \brief Mapped multi-output gates. */
   uint32_t multioutput_gates{ 0 };
+
+  /*! \brief Physical multi-output gates selected in the final cover.
+   *
+   * Literals use the input network's index convention: 2 * node_index +
+   * phase.  Fanins are stored in physical cell input-pin order and outputs
+   * are stored in standard-cell output order.
+   */
+  std::vector<multioutput_binding> multioutput_bindings{};
 
   /*! \brief Runtime for multi-output matching. */
   stopwatch<>::duration time_multioutput{ 0 };
@@ -4293,6 +4310,7 @@ private:
   void finalize_cover_block( cell_view<block_network>& res, block_map& old2new )
   {
     uint32_t multioutput_count = 0;
+    st.multioutput_bindings.clear();
 
     /* get standard cells */
     std::vector<standard_cell> const& lib = res.get_library();
@@ -4542,6 +4560,14 @@ private:
 
     /* permutate and negate to obtain the matched gate truth table */
     std::vector<signal<block_network>> children( cell.gates.front().num_vars );
+    emap_stats::multioutput_binding selected_binding;
+    selected_binding.cell_name = cell.name;
+    selected_binding.input_pins.resize( cell.gates.front().num_vars );
+    selected_binding.fanin_literals.resize( cell.gates.front().num_vars );
+    for ( auto pin = 0u; pin < cell.gates.front().num_vars; ++pin )
+    {
+      selected_binding.input_pins[pin] = cell.gates.front().pins[pin].name;
+    }
 
     /* output negations have already been assigned by the mapper */
     auto ctr = 0u;
@@ -4549,7 +4575,10 @@ private:
     {
       if ( ctr >= local_gate->num_vars )
         break;
-      children[node_match[index].best_gate[phase]->permutation[ctr]] = old2new[l][( node_match[index].phase[phase] >> ctr ) & 1];
+      auto const pin = node_match[index].best_gate[phase]->permutation[ctr];
+      auto const input_phase = ( node_match[index].phase[phase] >> ctr ) & 1;
+      children[pin] = old2new[l][input_phase];
+      selected_binding.fanin_literals[pin] = 2u * static_cast<uint32_t>( l ) + input_phase;
       ++ctr;
     }
 
@@ -4576,10 +4605,16 @@ private:
 
         outputs.push_back( node_index );
         functions.push_back( g.function );
+        uint8_t const output_phase = node_match[node_index].best_gate[0] != nullptr ? 0 : 1;
+        selected_binding.output_roles.push_back( g.output_name );
+        selected_binding.root_literals.push_back( 2u * node_index + output_phase );
       }
     }
 
     assert( outputs.size() == cell.gates.size() );
+    assert( selected_binding.fanin_literals.size() == cell.gates.front().num_vars );
+    assert( selected_binding.root_literals.size() == cell.gates.size() );
+    st.multioutput_bindings.emplace_back( std::move( selected_binding ) );
 
     /* create the block */
     auto f = res.create_node( children, functions );
