@@ -4311,6 +4311,9 @@ private:
   {
     uint32_t multioutput_count = 0;
     st.multioutput_bindings.clear();
+    /* The lower root is not always in the cover. Emit the shared cell from
+       whichever referenced output is visited first. */
+    std::vector<uint8_t> emitted_mo_tuples( multi_node_match.size(), 0 );
 
     /* get standard cells */
     std::vector<standard_cell> const& lib = res.get_library();
@@ -4370,10 +4373,15 @@ private:
         {
           assert( node_data.same_match == true );
 
-          if ( node_tuple_match[index].has_info && node_tuple_match[index].lowest_index )
+          if ( node_tuple_match[index].has_info )
           {
-            ++multioutput_count;
-            create_block_for_gate( res, old2new, index, phase, genlib_to_cell );
+            uint32_t const tuple = node_tuple_match[index].index;
+            if ( tuple < emitted_mo_tuples.size() && !emitted_mo_tuples[tuple] )
+            {
+              emitted_mo_tuples[tuple] = 1;
+              ++multioutput_count;
+              create_block_for_gate( res, old2new, index, phase, genlib_to_cell );
+            }
           }
           continue;
         }
